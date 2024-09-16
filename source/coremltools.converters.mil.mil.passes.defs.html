@@ -225,6 +225,10 @@
 <p>We consider a <code class="docutils literal notranslate"><span class="pre">constexpr_*</span></code> as duplicated if there exists such a previous <code class="docutils literal notranslate"><span class="pre">constexpr_*</span></code> that has the same <code class="docutils literal notranslate"><span class="pre">op_type</span></code> and input attributes.</p>
 </li>
 </ol>
+<p>Support options:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">const_threshold</span></code>: Skip deduplicating <code class="docutils literal notranslate"><span class="pre">const</span></code> ops that have smaller number of elements than a threshold. Defaults to <code class="docutils literal notranslate"><span class="pre">100</span></code>. i.e. the constants with <code class="docutils literal notranslate"><span class="pre">size</span> <span class="pre">&lt;</span> <span class="pre">100</span></code> will not be deduplicated.</p></li>
+</ul>
 </dd></dl>
 
 <dl class="py class">

@@ -533,7 +533,10 @@
 
         <span class="c1"># check the expand_dim op has axes = [0]</span>
         <span class="n">expand_dims_op</span> <span class="o">=</span> <span class="n">expand_dims_ops</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="k">if</span> <span class="n">expand_dims_op</span><span class="o">.</span><span class="n">axes</span><span class="o">.</span><span class="n">val</span> <span class="o">!=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
+        <span class="n">expand_dims_op_axes_val</span> <span class="o">=</span> <span class="n">expand_dims_op</span><span class="o">.</span><span class="n">axes</span><span class="o">.</span><span class="n">val</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">expand_dims_op_axes_val</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+            <span class="n">expand_dims_op_axes_val</span> <span class="o">=</span> <span class="n">expand_dims_op_axes_val</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">expand_dims_op_axes_val</span> <span class="o">!=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
             <span class="k">return</span> <span class="kc">False</span>
         <span class="n">ops_to_remove</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">expand_dims_op</span><span class="p">)</span>
         <span class="n">ops_to_remove</span> <span class="o">+=</span> <span class="n">other_ops</span>

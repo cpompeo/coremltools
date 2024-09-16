@@ -1233,6 +1233,118 @@
             <span class="n">new_var</span><span class="o">=</span><span class="n">scaled_output</span><span class="p">,</span>
             <span class="n">force_replace</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># Need to force replace because it involves replacing constexpr op.</span>
         <span class="p">)</span>
+
+
+<span class="nd">@register_pass</span><span class="p">(</span><span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;common&quot;</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">canonicalize_quantized_lut_pattern</span><span class="p">(</span><span class="n">AbstractGraphPass</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The quantized lut (e.g. each entry in the LUT is int8) could be represented by two patterns:</span>
+<span class="sd">        Pattern 1:</span>
+<span class="sd">            lut(int8) -&gt; constexpr_blockwise_shift_scale -&gt; lut(fp16) -&gt; constexpr_lut_to_dense -&gt; dense(fp16)</span>
+<span class="sd">        Pattern 2:</span>
+<span class="sd">            lut(int8) -&gt; constexpr_lut_to_dense -&gt; dense(int8) -&gt; constexpr_blockwise_shift_scale -&gt; dense(fp16)</span>
+<span class="sd">    Those two patterns are mathematically equivalent when the quantization is per-tensor or per-channel.</span>
+
+<span class="sd">    This graph pass makes sure we always use one specific pattern by re-ordering the ops.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_DEQUANT_FIRST</span> <span class="o">=</span> <span class="kc">True</span>  <span class="c1"># First dequantize and then depalettize (use pattern 1).</span>
+
+    <span class="k">def</span> <span class="nf">apply</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">prog</span><span class="p">):</span>
+        <span class="n">wrong_order_op1</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="s2">&quot;constexpr_lut_to_dense&quot;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_DEQUANT_FIRST</span> <span class="k">else</span> <span class="s2">&quot;constexpr_blockwise_shift_scale&quot;</span>
+        <span class="p">)</span>
+        <span class="n">wrong_order_op2</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="s2">&quot;constexpr_blockwise_shift_scale&quot;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_DEQUANT_FIRST</span> <span class="k">else</span> <span class="s2">&quot;constexpr_lut_to_dense&quot;</span>
+        <span class="p">)</span>
+
+        <span class="nd">@block_context_manager</span>
+        <span class="k">def</span> <span class="nf">apply_block</span><span class="p">(</span><span class="n">block</span><span class="p">:</span> <span class="n">Block</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">op</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">block</span><span class="o">.</span><span class="n">operations</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">op</span><span class="o">.</span><span class="n">blocks</span><span class="p">:</span>
+                    <span class="n">apply_block</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">op</span><span class="o">.</span><span class="n">op_type</span> <span class="o">==</span> <span class="n">wrong_order_op1</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">op</span><span class="o">.</span><span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">child_ops</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">op</span><span class="o">.</span><span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">child_ops</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">op_type</span> <span class="o">==</span> <span class="n">wrong_order_op2</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_quant_lut</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="n">op</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">prog</span><span class="o">.</span><span class="n">functions</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">apply_block</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_reorder_quant_lut</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">block</span><span class="p">:</span> <span class="n">Block</span><span class="p">,</span> <span class="n">old_op1</span><span class="p">:</span> <span class="n">Operation</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Original order is op1 -&gt; op2 -&gt; output_op, and after reorder it becomes op2 -&gt; op1 -&gt; output_op.</span>
+<span class="sd">        Here op1 and op2 corresponds to either lut op or quant op, depending on `_DEQUANT_FIRST`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">old_op2</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">child_ops</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># If the old op has some meaningful info in the name (such as &quot;conv1.weight&quot;), we need to keep it.</span>
+        <span class="n">new_op1_name</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">op_type</span> <span class="ow">in</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">name</span> <span class="k">else</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">name</span>
+        <span class="n">new_op2_name</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">op_type</span> <span class="ow">in</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">name</span> <span class="k">else</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">name</span>
+
+        <span class="k">if</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">op_type</span> <span class="o">==</span> <span class="s2">&quot;constexpr_blockwise_shift_scale&quot;</span><span class="p">:</span>
+            <span class="c1"># The old_op1 is dequant op and old_op2 is a lut op.</span>
+            <span class="c1"># The scale and offset from old_op1 is for lut, so the rank need to be adjusted.</span>
+            <span class="k">if</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span> <span class="o">!=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span>
+                    <span class="s2">&quot;The quantization on lut must be per-tensor, so last two dims in `scale` should &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;both be 1, but got scale with shape </span><span class="si">{</span><span class="n">old_op1</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+            <span class="n">new_scale_shape</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
+            <span class="n">scale</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">val</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">new_scale_shape</span><span class="p">)</span>
+            <span class="n">offset</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">offset</span>
+            <span class="k">if</span> <span class="n">offset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">offset</span><span class="o">.</span><span class="n">val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">offset</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">offset</span><span class="o">.</span><span class="n">val</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">new_scale_shape</span><span class="p">)</span>
+
+            <span class="n">new_op1_args</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;indices&quot;</span><span class="p">:</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="s2">&quot;lut&quot;</span><span class="p">:</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="s2">&quot;before_op&quot;</span><span class="p">:</span> <span class="n">old_op2</span><span class="p">}</span>
+            <span class="k">if</span> <span class="n">new_op1_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">new_op1_args</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_op1_name</span>
+            <span class="n">new_op1</span> <span class="o">=</span> <span class="n">mb</span><span class="o">.</span><span class="n">constexpr_lut_to_dense</span><span class="p">(</span><span class="o">**</span><span class="n">new_op1_args</span><span class="p">)</span>
+
+            <span class="n">new_op2_args</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">new_op1</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="n">scale</span><span class="p">,</span> <span class="s2">&quot;offset&quot;</span><span class="p">:</span> <span class="n">offset</span><span class="p">,</span> <span class="s2">&quot;before_op&quot;</span><span class="p">:</span> <span class="n">old_op2</span><span class="p">}</span>
+            <span class="k">if</span> <span class="n">new_op2_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">new_op2_args</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_op2_name</span>
+            <span class="n">new_op2</span> <span class="o">=</span> <span class="n">mb</span><span class="o">.</span><span class="n">constexpr_blockwise_shift_scale</span><span class="p">(</span><span class="o">**</span><span class="n">new_op2_args</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># The old_op1 is lut op and old_op2 is a dequant op.</span>
+            <span class="c1"># The scale and offset from old_op2 is for depalettized weight, so the rank need to be adjusted to match</span>
+            <span class="c1"># the lut&#39;s rank.</span>
+            <span class="n">new_scale_shape</span> <span class="o">=</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">shape</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">scale</span> <span class="o">=</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">val</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">new_scale_shape</span><span class="p">)</span>
+            <span class="n">offset</span> <span class="o">=</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">offset</span>
+            <span class="k">if</span> <span class="n">offset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">offset</span><span class="o">.</span><span class="n">val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">offset</span> <span class="o">=</span> <span class="n">old_op2</span><span class="o">.</span><span class="n">offset</span><span class="o">.</span><span class="n">val</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">new_scale_shape</span><span class="p">)</span>
+
+            <span class="n">lut</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">lut</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">shape</span> <span class="o">!=</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">shape</span> <span class="ow">in</span> <span class="n">new_scale_shape</span><span class="p">):</span>
+                <span class="c1"># The lut need to be repeated when necessary. For example, in per-channel-scale, the lut has shape</span>
+                <span class="c1"># [16, 1, 16, 1], indices has shape [32, 1], and scale has shape [32, 1]. It means every two rows in</span>
+                <span class="c1"># the weight share a lut, and it&#39;s impossible to apply 32 scales to 16 lut tables. So we need to repeat</span>
+                <span class="c1"># the lut to become [32, 1, 16, 1], and then apply those 32 scales to each row.</span>
+                <span class="n">lut</span> <span class="o">=</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">lut</span><span class="o">.</span><span class="n">val</span>
+                <span class="k">if</span> <span class="n">lut</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">return</span>  <span class="c1"># Cannot handle the reording when the lut is not const.</span>
+                <span class="k">for</span> <span class="n">axis</span><span class="p">,</span> <span class="p">(</span><span class="n">scale_shape</span><span class="p">,</span> <span class="n">lut_shape</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">new_scale_shape</span><span class="p">,</span> <span class="n">lut</span><span class="o">.</span><span class="n">shape</span><span class="p">)):</span>
+                    <span class="k">if</span> <span class="n">scale_shape</span> <span class="o">&gt;</span> <span class="n">lut_shape</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">scale_shape</span> <span class="o">%</span> <span class="n">lut_shape</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                            <span class="k">return</span>  <span class="c1"># Skip when lut&#39;s shape cannot be repeated to match scale&#39;s shape.</span>
+                        <span class="n">lut</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">lut</span><span class="p">,</span> <span class="n">scale_shape</span> <span class="o">//</span> <span class="n">lut_shape</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="n">axis</span><span class="p">)</span>
+
+            <span class="n">new_op1_args</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">lut</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="n">scale</span><span class="p">,</span> <span class="s2">&quot;offset&quot;</span><span class="p">:</span> <span class="n">offset</span><span class="p">,</span> <span class="s2">&quot;before_op&quot;</span><span class="p">:</span> <span class="n">old_op1</span><span class="p">}</span>
+            <span class="k">if</span> <span class="n">new_op1_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">new_op1_args</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_op1_name</span>
+            <span class="n">new_op1</span> <span class="o">=</span> <span class="n">mb</span><span class="o">.</span><span class="n">constexpr_blockwise_shift_scale</span><span class="p">(</span><span class="o">**</span><span class="n">new_op1_args</span><span class="p">)</span>
+
+            <span class="n">new_op2_args</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;indices&quot;</span><span class="p">:</span> <span class="n">old_op1</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="s2">&quot;lut&quot;</span><span class="p">:</span> <span class="n">new_op1</span><span class="p">,</span> <span class="s2">&quot;before_op&quot;</span><span class="p">:</span> <span class="n">old_op1</span><span class="p">}</span>
+            <span class="k">if</span> <span class="n">new_op2_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">new_op2_args</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_op2_name</span>
+            <span class="n">new_op2</span> <span class="o">=</span> <span class="n">mb</span><span class="o">.</span><span class="n">constexpr_lut_to_dense</span><span class="p">(</span><span class="o">**</span><span class="n">new_op2_args</span><span class="p">)</span>
+
+        <span class="n">block</span><span class="o">.</span><span class="n">replace_uses_of_var_after_op</span><span class="p">(</span>
+            <span class="n">anchor_op</span><span class="o">=</span><span class="n">old_op2</span><span class="p">,</span>
+            <span class="n">old_var</span><span class="o">=</span><span class="n">old_op2</span><span class="o">.</span><span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="n">new_var</span><span class="o">=</span><span class="n">new_op2</span><span class="p">,</span>
+            <span class="n">force_replace</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># Need to force replace because it involves replacing constexpr op.</span>
+        <span class="p">)</span>
+        <span class="n">block</span><span class="o">.</span><span class="n">remove_ops</span><span class="p">([</span><span class="n">old_op1</span><span class="p">,</span> <span class="n">old_op2</span><span class="p">])</span>
 </pre></div>
 
            </div>

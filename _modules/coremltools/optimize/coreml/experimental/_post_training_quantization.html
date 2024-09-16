@@ -99,7 +99,7 @@
 <span class="c1"># found in the LICENSE.txt file or at https://opensource.org/licenses/BSD-3-Clause</span>
 
 <span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">defaultdict</span>
-<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
@@ -121,13 +121,17 @@
 
 <div class="viewcode-block" id="linear_quantize_activations">
 <a class="viewcode-back" href="../../../../../source/coremltools.optimize.coreml.quantization.html#coremltools.optimize.coreml.experimental.linear_quantize_activations">[docs]</a>
-<span class="k">def</span> <span class="nf">linear_quantize_activations</span><span class="p">(</span><span class="n">mlmodel</span><span class="p">:</span> <span class="n">_MLModel</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">_OptimizationConfig</span><span class="p">,</span> <span class="n">sample_data</span><span class="p">:</span> <span class="n">List</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">linear_quantize_activations</span><span class="p">(</span>
+    <span class="n">mlmodel</span><span class="p">:</span> <span class="n">_MLModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">_OptimizationConfig</span><span class="p">,</span>
+    <span class="n">sample_data</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span>
+<span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Utility function to convert a float precision MLModel of type ``mlprogram``, which uses</span>
 <span class="sd">    float-precision activations, into a compressed MLModel that uses n-bit activations. Currently, only n=8</span>
 <span class="sd">    is suppported.</span>
 
-<span class="sd">    This is achieved by feeding real sample data into the input MLModel, calibrating the resulting float activation values, </span>
+<span class="sd">    This is achieved by feeding real sample data into the input MLModel, calibrating the resulting float activation values,</span>
 <span class="sd">    converting the calibrated values into ``quantize`` and ``dequantize`` op pairs, and inserting those</span>
 <span class="sd">    op pairs into the new MLModel instance where activations get quantized.</span>
 
@@ -144,7 +148,9 @@
 
 <span class="sd">    sample_data: List</span>
 <span class="sd">        Data used to characterize statistics of the activation values of the original float precision model.</span>
-<span class="sd">        Expects a list of sample input dictionaries.</span>
+<span class="sd">        Expects a list of sample input dictionaries, which should have the same format as the data used in `.predict`</span>
+<span class="sd">        method for the mlmodel. More specifically, the input name need to be specified in the data, unless it&#39;s a single</span>
+<span class="sd">        input model where the name will be auto inferred.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
@@ -174,6 +180,17 @@
 <span class="sd">        )</span>
 <span class="sd">        compressed_model_w8a8 = cto.linear_quantize_weights(compressed_model_a8, weight_config)</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Validate Sample data. If the sample data name is not provided, try to infer it.</span>
+    <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">sample_data</span><span class="p">:</span>
+        <span class="k">if</span> <span class="kc">None</span> <span class="ow">in</span> <span class="n">sample</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">input_spec</span> <span class="o">=</span> <span class="n">mlmodel</span><span class="o">.</span><span class="n">get_spec</span><span class="p">()</span><span class="o">.</span><span class="n">description</span><span class="o">.</span><span class="n">input</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">input_spec</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;When the model has multiple inputs, please provide the name for each data in `sample_data`&quot;</span>
+                <span class="p">)</span>
+            <span class="n">inferred_input_name</span> <span class="o">=</span> <span class="n">input_spec</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">name</span>
+            <span class="n">sample</span><span class="p">[</span><span class="n">inferred_input_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">sample</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
+            <span class="k">del</span> <span class="n">sample</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
 
     <span class="c1">### Apply four major graph passes in order.</span>
 
@@ -318,17 +335,25 @@
         <span class="n">group_rmin_list</span><span class="p">,</span> <span class="n">group_rmax_list</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
 
         <span class="k">for</span> <span class="n">tensor_name</span> <span class="ow">in</span> <span class="n">concat_group</span><span class="p">:</span>
-            <span class="n">group_rmin_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmin&quot;</span><span class="p">])</span>
-            <span class="n">group_rmax_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmax&quot;</span><span class="p">])</span>
+            <span class="c1"># Some tensor_name may not have rmin/rmax if the calibration failed before.</span>
+            <span class="k">if</span> <span class="n">tensor_name</span> <span class="ow">in</span> <span class="n">activation_stats_dict</span><span class="p">:</span>
+                <span class="n">group_rmin_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmin&quot;</span><span class="p">])</span>
+                <span class="n">group_rmax_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmax&quot;</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_rmin_list</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;None of the calibration run succeeded. Please check logs about calibrating sample failures.&quot;</span>
+            <span class="p">)</span>
         <span class="n">group_rmin</span><span class="p">,</span> <span class="n">group_rmax</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">group_rmin_list</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">group_rmax_list</span><span class="p">)</span>
 
         <span class="k">for</span> <span class="n">tensor_name</span> <span class="ow">in</span> <span class="n">concat_group</span><span class="p">:</span>
-            <span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmin&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">group_rmin</span>
-            <span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmax&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">group_rmax</span>
+            <span class="k">if</span> <span class="n">tensor_name</span> <span class="ow">in</span> <span class="n">activation_stats_dict</span><span class="p">:</span>
+                <span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmin&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">group_rmin</span>
+                <span class="n">activation_stats_dict</span><span class="p">[</span><span class="n">tensor_name</span><span class="p">][</span><span class="s2">&quot;rmax&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">group_rmax</span>
 
 
 <span class="k">def</span> <span class="nf">_get_activation_calibration_stats</span><span class="p">(</span>
-    <span class="n">fpmodel</span><span class="p">:</span> <span class="n">_MLModel</span><span class="p">,</span> <span class="n">sample_data</span><span class="p">:</span> <span class="n">List</span>
+    <span class="n">fpmodel</span><span class="p">:</span> <span class="n">_MLModel</span><span class="p">,</span> <span class="n">sample_data</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Calibration and store a dict of intermediate tensor stats.</span>
@@ -344,7 +369,6 @@
 <span class="sd">    -------</span>
 <span class="sd">    activation_calibration_stats: dict</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
         <span class="s2">&quot;Running compression pass linear_quantize_activations: start calibrating </span><span class="si">{}</span><span class="s2"> samples&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
             <span class="nb">len</span><span class="p">(</span><span class="n">sample_data</span><span class="p">)</span>

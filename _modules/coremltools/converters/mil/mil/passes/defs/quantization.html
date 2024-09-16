@@ -104,6 +104,7 @@
 
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
+<span class="kn">from</span> <span class="nn">coremltools</span> <span class="kn">import</span> <span class="n">_logger</span> <span class="k">as</span> <span class="n">logger</span>
 <span class="kn">from</span> <span class="nn">coremltools.converters.mil._deployment_compatibility</span> <span class="kn">import</span> <span class="n">AvailableTarget</span>
 <span class="kn">from</span> <span class="nn">coremltools.converters.mil.input_types</span> <span class="kn">import</span> <span class="n">TensorType</span>
 <span class="kn">from</span> <span class="nn">coremltools.converters.mil.mil</span> <span class="kn">import</span> <span class="n">Block</span>
@@ -388,6 +389,11 @@
                     <span class="nb">len</span><span class="p">(</span><span class="n">var</span><span class="o">.</span><span class="n">_child_ops</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
                     <span class="ow">and</span> <span class="n">casted_var_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_cache_vars</span><span class="p">()</span>
                 <span class="p">):</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_cache_vars</span><span class="p">()[</span><span class="n">casted_var_name</span><span class="p">]</span><span class="o">.</span><span class="n">op</span><span class="o">.</span><span class="n">x</span> <span class="o">!=</span> <span class="n">var</span><span class="p">:</span>
+                        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                            <span class="s2">&quot;The cached cast Var doesn&#39;t match the original Var. It&#39;s due to duplicated Var &quot;</span>
+                            <span class="sa">f</span><span class="s2">&quot;names in the graph for </span><span class="si">{</span><span class="n">casted_var_name</span><span class="si">}</span><span class="s2">.&quot;</span>
+                        <span class="p">)</span>
                     <span class="n">casted_inputs</span><span class="p">[</span><span class="n">param</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_cache_vars</span><span class="p">()[</span><span class="n">casted_var_name</span><span class="p">]</span>
                 <span class="k">else</span><span class="p">:</span>
                     <span class="n">x</span> <span class="o">=</span> <span class="n">mb</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span>
